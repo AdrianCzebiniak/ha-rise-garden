@@ -22,16 +22,28 @@ _LOGGER = logging.getLogger(__name__)
 def _extract_crops(detail: dict) -> list[dict]:
     """Flatten all crops from a garden detail response into a list."""
     crops = []
+
     for tray in detail.get("trays", []):
         for section in tray.get("tray_sections", []):
+            order = 1
             for row in section.get("netcups", []):
                 for netcup in row:
-                    if crop := netcup.get("crop"):
+                    if raw_crop := netcup.get("crop"):
+                        crop = dict(raw_crop)
+                        crop.setdefault("tray_location", "garden")
+                        crop.setdefault("order", order)
                         crops.append(crop)
+                    order += 1
+
     for nursery in detail.get("nurseries", []):
         for tray in nursery.get("trays", []):
             for section in tray.get("tray_sections", []):
-                crops.extend(section.get("crops", []))
+                for idx, raw_crop in enumerate(section.get("crops", []), start=1):
+                    crop = dict(raw_crop)
+                    crop.setdefault("tray_location", "nursery")
+                    crop.setdefault("order", crop.get("order") or idx)
+                    crops.append(crop)
+
     return crops
 
 
@@ -334,6 +346,12 @@ class RiseGardenCropSensor(CoordinatorEntity, SensorEntity):
             "is_ready_to_harvest": crop.get("is_ready_to_harvest"),
             "harvest_count": crop.get("harvest_count"),
             "buy_url": crop.get("buy_url"),
+            "tray_location": crop.get("tray_location"),
+            "order": crop.get("order"),
+            "image_url": (
+                crop.get("image_transparent_small")
+                or crop.get("image_transparent_big")
+            ),
         }
 
         harvest_date_str = crop.get("harvest_date")
