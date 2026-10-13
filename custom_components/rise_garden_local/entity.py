@@ -24,6 +24,7 @@ class RiseLocalEntity(CoordinatorEntity[RiseLocalCoordinator]):
             "manufacturer": "Rise Gardens",
             "model": "Indoor Garden (ESP32 controller)",
             "connections": {("mac", _mac(self._unit_id))} if _mac(self._unit_id) else set(),
+            "sw_version": self.coordinator.firmware,
         }
 
 

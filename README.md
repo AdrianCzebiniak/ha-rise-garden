@@ -5,9 +5,10 @@ A custom Home Assistant integration that controls a [Rise Gardens](https://riseg
 ## Features
 
 - **Grow lights**: three independently dimmable channels (0-100%)
-- **Light schedule**: read on each light as the `schedule_utc` attribute, and set with the `rise_garden_local.set_light_schedule` action
+- **Light schedule**: edit it from the device page in local time (lights-on time, light hours, peak brightness and sunrise/sunset ramp), see it as a sensor, or set arbitrary steps with the `rise_garden_local.set_light_schedule` action
+- **Daylight saving**: the controller runs on UTC, so the integration shifts the schedule when your UTC offset changes
 - **Pump**: manual on/off switch, plus a pump current sensor (mA) that shows whether it is actually running
-- **Pump cycle**: run time and rest time, editable as number entities
+- **Pump schedule**: run time and rest time, editable, plus a summary sensor ("5 min every 60 min")
 - **Clock sync**: keeps the controller's clock correct from Home Assistant, so schedules keep working without internet/NTP
 - **Diagnostics**: Wi-Fi signal, controller time, and whether the controller still has a cloud (MQTT) connection
 
@@ -40,13 +41,24 @@ No username or password is needed.
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| Grow light 1, 2, 3 | Light | One per light channel, with brightness. `schedule_utc` attribute holds the schedule |
+| Grow light 1, 2, 3 | Light | One per light channel, with brightness |
+| Lights on | Time | When the schedule starts (local time, sunrise ramp included) |
+| Light hours | Number | Total time the lights are on each day, ramps included |
+| Peak brightness | Number | Brightness during the main part of the day (%) |
+| Sunrise/sunset ramp | Number | Length of each ramp in minutes (0 = no ramp). Each ramp has 3 steps at 25/50/75% of peak |
+| Light schedule | Sensor | Summary such as `07:00-23:00`. Attributes `steps` (local time) and `steps_utc` |
 | Pump | Switch | Turns the water pump on or off |
 | Pump current | Sensor | Pump motor current in mA (about 200 mA while running, 0 when off) |
 | Pump run time / Pump rest time | Number | Pump cycle in seconds (for example 300 s on, 3300 s off) |
+| Pump schedule | Sensor | Summary such as `5 min every 60 min` |
 | Wi-Fi signal | Sensor | Controller Wi-Fi RSSI (diagnostic) |
+| Wi-Fi network | Sensor | SSID the controller is joined to (diagnostic) |
 | Controller time | Sensor | The controller's clock (diagnostic) |
 | Cloud connection | Binary sensor | Whether the controller is still connected to the Rise cloud (diagnostic) |
+
+The firmware version appears on the device page.
+
+Editing any of the four light-schedule settings rewrites the whole schedule from those four values. A custom schedule set from the Rise app or the action below is then replaced. The settings always show the closest match to whatever schedule is on the controller.
 
 The controller's own schedule and pump cycle keep running. A brightness or pump state you set by hand will likely be replaced at the next schedule step or pump cycle.
 
@@ -54,7 +66,7 @@ The controller's own schedule and pump cycle keep running. A brightness or pump 
 
 ### `rise_garden_local.set_light_schedule`
 
-Replaces the controller's **whole** light schedule. Times are **UTC**, because the controller's clock runs on UTC. It uses the same keys as the `schedule_utc` attribute, so you can copy that attribute, edit it and send it back.
+For schedules the four settings can't express. Replaces the controller's **whole** light schedule. Times are **UTC**, because the controller's clock runs on UTC. It uses the same keys as the Light schedule sensor's `steps_utc` attribute, so you can copy that attribute, edit it and send it back.
 
 ```yaml
 action: rise_garden_local.set_light_schedule
@@ -71,7 +83,7 @@ data:
 
 The controller accepts command lines of at most 127 characters, and a malformed or cut-off schedule command **erases** the schedule. To prevent that, the integration sends the shortest form the firmware accepts, refuses a schedule that would still be too long, and reads the schedule back afterwards to check it. In practice about 7 steps fit.
 
-Because the times are UTC, the schedule shifts by an hour in local time when daylight saving time starts or ends, unless you send it again.
+Daylight-saving shifts apply only to schedules written through the light-schedule settings. A schedule sent with this action keeps its UTC times, so it moves by an hour in local time when the clocks change.
 
 ### `rise_garden_local.send_command`
 

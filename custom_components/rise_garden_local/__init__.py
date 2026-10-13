@@ -51,7 +51,12 @@ SET_LIGHT_SCHEDULE_SCHEMA = vol.Schema(
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up from a config entry."""
     client = RiseGardenLocal(entry.data[CONF_HOST], entry.data.get(CONF_PORT, DEFAULT_PORT))
-    coordinator = RiseLocalCoordinator(hass, client)
+    coordinator = RiseLocalCoordinator(hass, entry, client)
+    try:
+        coordinator.firmware = (await client.get("fwrev")) or None
+        coordinator.ssid = (await client.get("nvget ssid")).strip('"') or None
+    except RiseLocalError:
+        pass
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {

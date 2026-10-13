@@ -58,10 +58,6 @@ class RiseLocalLight(RiseLocalEntity, LightEntity):
         lvl = self._level
         return None if lvl is None else round(lvl * 2.55)
 
-    @property
-    def extra_state_attributes(self) -> dict:
-        return {"schedule_utc": self.coordinator.data.get("light_schedule")}
-
     async def _set_level(self, level: int) -> None:
         level = max(0, min(100, level))
         try:

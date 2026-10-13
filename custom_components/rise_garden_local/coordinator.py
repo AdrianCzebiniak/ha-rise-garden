@@ -4,12 +4,14 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from .api import RiseGardenLocal, RiseLocalError
 from .const import CLOCK_MAX_DRIFT, DOMAIN, LAMP_CHANNELS, UPDATE_INTERVAL
+from .schedule import build_steps, describe
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -17,14 +19,65 @@ _LOGGER = logging.getLogger(__name__)
 class RiseLocalCoordinator(DataUpdateCoordinator):
     """Polls the controller's read commands one at a time (never in parallel)."""
 
-    def __init__(self, hass: HomeAssistant, client: RiseGardenLocal) -> None:
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, client: RiseGardenLocal) -> None:
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
+            config_entry=entry,
             update_interval=timedelta(seconds=UPDATE_INTERVAL),
         )
         self.client = client
+        # Read once at setup (static): shown on the device page / diagnostics.
+        self.firmware: str | None = None
+        self.ssid: str | None = None
+
+    @staticmethod
+    def utc_offset() -> int:
+        """Home Assistant's current UTC offset in seconds (changes with DST)."""
+        return int(dt_util.now().utcoffset().total_seconds())
+
+    def light_model(self) -> dict | None:
+        """The light schedule as on time / hours / peak / ramp, in local time."""
+        return describe(self.data.get("light_schedule") if self.data else None, self.utc_offset())
+
+    async def async_set_light_model(self, **changes) -> None:
+        """Change part of the light model and write the generated schedule."""
+        model = self.light_model()
+        if model is None:
+            raise ValueError("no light schedule on the controller to edit")
+        model.update(changes)
+        offset = self.utc_offset()
+        await self.client.set_light_schedule(build_steps(model, offset))
+        # Remember what we wrote so the schedule can follow DST changes.
+        self.hass.config_entries.async_update_entry(
+            self.config_entry,
+            options={**self.config_entry.options, "light_model": model, "light_offset": offset},
+        )
+        await self.async_request_refresh()
+
+    async def _follow_dst(self, steps: list | None) -> None:
+        """Re-send the schedule when the UTC offset changed since HA wrote it.
+
+        Only if the controller still holds exactly what HA wrote, so a schedule
+        changed elsewhere (Rise app, raw service) is never overwritten.
+        """
+        opts = self.config_entry.options
+        model, written_offset = opts.get("light_model"), opts.get("light_offset")
+        offset = self.utc_offset()
+        if model is None or written_offset is None or written_offset == offset:
+            return
+        try:
+            if steps != build_steps(model, written_offset):
+                return
+            _LOGGER.info("UTC offset changed (%s -> %s s); shifting the light schedule", written_offset, offset)
+            await self.client.set_light_schedule(build_steps(model, offset))
+        except (RiseLocalError, ValueError) as err:
+            _LOGGER.warning("Failed to shift the light schedule for DST: %s", err)
+            return
+        self.hass.config_entries.async_update_entry(
+            self.config_entry, options={**opts, "light_offset": offset}
+        )
 
     async def _async_update_data(self) -> dict:
         """Fetch all values sequentially. The client serialises access."""
@@ -40,6 +93,7 @@ class RiseLocalCoordinator(DataUpdateCoordinator):
             except (RiseLocalError, ValueError):
                 data["pump_cycle"] = None
             data["light_schedule"] = await self.client.light_schedule()
+            await self._follow_dst(data["light_schedule"])
             data["rssi"] = await self.client.get_int("rssi")
             data["mqtt"] = await self.client.get_int("mqtt")
             # 'time' -> "<epoch> <YYYY-MM-DD HH:MM:SS>"

@@ -10,7 +10,7 @@ DEFAULT_PORT = 1000
 # The controller is single-client and slow; poll gently.
 UPDATE_INTERVAL = 60  # seconds
 
-PLATFORMS = ["light", "sensor", "binary_sensor", "switch", "number"]
+PLATFORMS = ["light", "sensor", "binary_sensor", "switch", "number", "time"]
 
 # Re-set the controller clock when its time of day drifts more than this (seconds).
 CLOCK_MAX_DRIFT = 30
