@@ -1,113 +1,101 @@
-# Rise Gardens Integration for Home Assistant
+# Rise Garden (Local) for Home Assistant
 
-A custom Home Assistant integration for [Rise Gardens](https://risegardens.com/) indoor hydroponic gardens.
+A custom Home Assistant integration that controls a [Rise Gardens](https://risegardens.com/) indoor garden **entirely over your local network**. It does not use the Rise cloud, your Rise account or the internet. It talks directly to the garden's ESP32 controller on TCP port 1000.
 
 ## Features
 
-- **Light Control**: Turn lights on/off and adjust brightness (0-100%)
-- **Water Level Monitoring**: Track water level percentage and depth
-- **Temperature Sensor**: Monitor ambient temperature
-- **Online Status**: See if your garden is connected
-- **Task Tracking**: View pending care tasks (feeding, harvesting, etc.)
+- **Grow lights**: three independently dimmable channels (0-100%)
+- **Light schedule**: read on each light as the `schedule_utc` attribute, and set with the `rise_garden_local.set_light_schedule` action
+- **Pump**: manual on/off switch, plus a pump current sensor (mA) that shows whether it is actually running
+- **Pump cycle**: run time and rest time, editable as number entities
+- **Clock sync**: keeps the controller's clock correct from Home Assistant, so schedules keep working without internet/NTP
+- **Diagnostics**: Wi-Fi signal, controller time, and whether the controller still has a cloud (MQTT) connection
 
-## Supported Devices
-
-- Rise Gardens Floor Unit (V2)
-- Rise Gardens Personal Garden
-- Rise Gardens Family Garden
+The controller runs its light schedule and pump cycle on its own, so the garden keeps working even when Home Assistant is down.
 
 ## Installation
 
-### HACS (Recommended)
+### HACS
 
 1. Open HACS in Home Assistant
-2. Click on "Integrations"
-3. Click the three dots in the top right corner
-4. Select "Custom repositories"
-5. Add this repository URL and select "Integration" as the category
-6. Click "Add"
-7. Search for "Rise Gardens" and install it
-8. Restart Home Assistant
+2. Click the three dots in the top right corner and choose **Custom repositories**
+3. Add this repository URL with category **Integration**
+4. Search for **Rise Garden (Local)**, install it, and restart Home Assistant
 
-### Manual Installation
+### Manual
 
-1. Download the `custom_components/rise_garden` folder from this repository
-2. Copy it to your Home Assistant's `custom_components` directory
-3. Restart Home Assistant
+1. Copy the `custom_components/rise_garden_local` folder into your Home Assistant `custom_components` directory
+2. Restart Home Assistant
 
 ## Configuration
 
-1. Go to **Settings** → **Devices & Services**
-2. Click **Add Integration**
-3. Search for **Rise Gardens**
-4. Enter your Rise Gardens app credentials (email and password)
-5. Click **Submit**
+1. Give the garden controller a fixed IP address (DHCP reservation) on your router
+2. Go to **Settings** → **Devices & Services** → **Add Integration**
+3. Search for **Rise Garden (Local)**
+4. Enter the controller's IP address (port `1000` is the default)
+
+No username or password is needed.
 
 ## Entities
 
-For each garden, the following entities are created:
-
 | Entity | Type | Description |
 |--------|------|-------------|
-| `light.<garden_name>_light` | Light | Control garden lights with brightness |
-| `sensor.<garden_name>_water_level` | Sensor | Water level as percentage |
-| `sensor.<garden_name>_water_depth` | Sensor | Water depth in millimeters |
-| `sensor.<garden_name>_temperature` | Sensor | Ambient temperature in °C |
-| `sensor.<garden_name>_online` | Sensor | Garden connectivity status |
-| `sensor.<garden_name>_pending_tasks` | Sensor | Number of pending care tasks |
+| Grow light 1, 2, 3 | Light | One per light channel, with brightness. `schedule_utc` attribute holds the schedule |
+| Pump | Switch | Turns the water pump on or off |
+| Pump current | Sensor | Pump motor current in mA (about 200 mA while running, 0 when off) |
+| Pump run time / Pump rest time | Number | Pump cycle in seconds (for example 300 s on, 3300 s off) |
+| Wi-Fi signal | Sensor | Controller Wi-Fi RSSI (diagnostic) |
+| Controller time | Sensor | The controller's clock (diagnostic) |
+| Cloud connection | Binary sensor | Whether the controller is still connected to the Rise cloud (diagnostic) |
 
-## Example Automations
+The controller's own schedule and pump cycle keep running. A brightness or pump state you set by hand will likely be replaced at the next schedule step or pump cycle.
 
-### Turn off lights at night
+## Actions
+
+### `rise_garden_local.set_light_schedule`
+
+Replaces the controller's **whole** light schedule. Times are **UTC**, because the controller's clock runs on UTC. It uses the same keys as the `schedule_utc` attribute, so you can copy that attribute, edit it and send it back.
+
 ```yaml
-automation:
-  - alias: "Rise Garden Lights Off at Night"
-    trigger:
-      - platform: time
-        at: "22:00:00"
-    action:
-      - service: light.turn_off
-        target:
-          entity_id: light.herb_light
+action: rise_garden_local.set_light_schedule
+data:
+  steps:
+    - {start_utc: "11:00:00", duration_s: 2400, level: 25}
+    - {start_utc: "11:40:00", duration_s: 2400, level: 50}
+    - {start_utc: "12:20:00", duration_s: 2400, level: 75}
+    - {start_utc: "13:00:00", duration_s: 43200}          # level defaults to 100
+    - {start_utc: "01:00:00", duration_s: 2400, level: 75}
+    - {start_utc: "01:40:00", duration_s: 2400, level: 50}
+    - {start_utc: "02:20:00", duration_s: 2400, level: 25}
 ```
 
-### Notify when water is low
-```yaml
-automation:
-  - alias: "Rise Garden Low Water Alert"
-    trigger:
-      - platform: numeric_state
-        entity_id: sensor.herb_water_level
-        below: 20
-    action:
-      - service: notify.mobile_app
-        data:
-          message: "Your Rise Garden needs water!"
-```
+The controller accepts command lines of at most 127 characters, and a malformed or cut-off schedule command **erases** the schedule. To prevent that, the integration sends the shortest form the firmware accepts, refuses a schedule that would still be too long, and reads the schedule back afterwards to check it. In practice about 7 steps fit.
 
-## API Reference
+Because the times are UTC, the schedule shifts by an hour in local time when daylight saving time starts or ends, unless you send it again.
 
-This integration uses the Rise Gardens cloud API:
-- Authentication: Auth0 with password-realm grant
-- Base URL: `https://prod-api.risegds.com/v2`
+### `rise_garden_local.send_command`
 
-## Troubleshooting
+Sends a raw command line to the controller and returns its reply. Use it for exploring and debugging. Some commands change settings stored on the controller, so be careful.
 
-### Integration not loading
-- Ensure you're using the same email/password as the Rise Gardens mobile app
-- Check Home Assistant logs for error messages
+## Going fully offline
 
-### Garden shows as offline
-- Verify your garden is connected to WiFi
-- Check the Rise Gardens app to confirm connectivity
+Once the integration works, you can block the controller's internet access on your router. The **Cloud connection** sensor will turn off, while the lights, the schedule, the pump cycle and clock sync keep working. The Rise app will no longer be able to reach the garden.
 
-### Sensors showing "Unknown"
-- The garden may be offline
-- Wait for the next update interval (60 seconds)
+## Controller protocol
 
-## Contributing
+The controller accepts plaintext commands, one per line ending in `\r\n`, and replies with `OK <value>` or `FAIL syntax`. It handles only one client at a time and can lock up if it gets several connections at once, so the integration sends one command at a time.
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+| Command | Meaning |
+|---------|---------|
+| `lamp <1-3>` / `lamp <1-3> <0-100>` | Read / set a light channel |
+| `wpump` / `wpump on\|off` | Read / set the pump |
+| `wpcurrent` | Pump current (mA) |
+| `wpc` / `wpc <on_s> <off_s>` | Read / set the pump cycle. Non-numeric values silently become `0 0` |
+| `ltimer` / `ltimer set <H>:<MM>:<SS>[%level]#<seconds> ...` | Read / replace the light schedule (UTC) |
+| `time` / `time HH:MM:SS` | Read / set the clock (UTC time of day only; the date cannot be set) |
+| `rssi`, `mqtt`, `unitid`, `fwrev` | Diagnostics |
+
+Verified on firmware `2012 v4.3.1`.
 
 ## License
 
